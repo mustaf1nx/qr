@@ -23,9 +23,9 @@ class Event(Base):
     __tablename__ = "events"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(150))
-    starts_at: Mapped[int]
-    expires_at: Mapped[int]
-    capacity: Mapped[int]
+    starts_at: Mapped[int | None] = mapped_column(nullable=True)
+    expires_at: Mapped[int | None] = mapped_column(nullable=True)
+    capacity: Mapped[int | None] = mapped_column(nullable=True)
     issued_count: Mapped[int] = mapped_column(default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     require_follow: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -1,5 +1,5 @@
 import os
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
+os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", "sqlite:///./test.db")
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["META_ACCESS_TOKEN"] = ""
 import hashlib
@@ -53,6 +53,17 @@ def test_capacity():
     issue_ticket(1,"1","one",True)
     with pytest.raises(TicketError):
         issue_ticket(1,"2","two",True)
+
+
+def test_unlimited_ongoing_registration():
+    with Session.begin() as s:
+        e=s.get(Event,1)
+        e.capacity=e.starts_at=e.expires_at=None
+    for i in range(12):
+        t=issue_ticket(1,str(i),'guest',True)
+    assert client().post('/api/scanner/redeem',json={"event_id":1,"token":t.token}).json()['result']=='accepted'
+    with Session() as s:
+        assert s.get(Event,1).issued_count==12
 
 
 def test_concurrent_redeem():
@@ -114,6 +125,51 @@ def test_public_ticket_and_qr():
     r=c.get('/api/tickets/'+t.token+'/qr')
     assert r.status_code==200 and r.content.startswith(b'\x89PNG')
     assert c.get('/api/tickets/unknown').status_code==404
+
+
+def test_worker_delivery_retry_without_duplicate_ticket(monkeypatch):
+    import asyncio
+    from app import meta
+    delivered=[]
+    async def profile(sender):
+        return 'guest', True
+    async def send(sender, text):
+        delivered.append(text)
+        if len(delivered)==1:
+            raise RuntimeError('Temporary transport failure')
+    monkeypatch.setattr(meta,'profile',profile)
+    monkeypatch.setattr(meta,'send',send)
+    with Session.begin() as s:
+        s.add(WebhookEvent(mid='retry',sender='123',text='БИЛЕТ'))
+    asyncio.run(meta.process_one())
+    with Session.begin() as s:
+        j=s.get(WebhookEvent,'retry')
+        assert j.state=='pending' and j.reply
+        j.available_at=now()-1
+    asyncio.run(meta.process_one())
+    with Session() as s:
+        assert s.get(WebhookEvent,'retry').state=='done'
+        assert s.scalar(select(func.count()).select_from(Ticket))==1
+    assert delivered[0]==delivered[1]
+
+
+def test_worker_profile_error_does_not_issue_ticket(monkeypatch):
+    import asyncio
+    import httpx
+    from app import meta
+    delivered=[]
+    async def profile(sender):
+        raise httpx.ConnectError('offline')
+    async def send(sender,text):
+        delivered.append(text)
+    monkeypatch.setattr(meta,'profile',profile)
+    monkeypatch.setattr(meta,'send',send)
+    with Session.begin() as s:
+        s.add(WebhookEvent(mid='error',sender='123',text='БИЛЕТ'))
+    asyncio.run(meta.process_one())
+    assert 'Не удалось проверить' in delivered[0]
+    with Session() as s:
+        assert s.scalar(select(func.count()).select_from(Ticket))==0
 
 
 @pytest.mark.skipif(engine.dialect.name != 'postgresql', reason='Requires PostgreSQL row locking')

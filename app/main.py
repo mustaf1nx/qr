@@ -112,9 +112,9 @@ def logout(request: Request, response: Response):
 
 class EventInput(BaseModel):
     name: str = Field(min_length=1, max_length=150)
-    starts_at: int
-    expires_at: int
-    capacity: int = Field(ge=1, le=1000000)
+    starts_at: int | None = None
+    expires_at: int | None = None
+    capacity: int | None = Field(default=None, ge=1, le=1000000)
     keyword: str = Field(min_length=1, max_length=50)
     require_follow: bool = True
     active: bool = True
@@ -122,7 +122,7 @@ class EventInput(BaseModel):
     @model_validator(mode="after")
     def validate_event(self):
         self.keyword = self.keyword.strip().upper()
-        if not self.keyword or self.expires_at <= self.starts_at:
+        if not self.keyword or (self.expires_at is not None and self.starts_at is not None and self.expires_at <= self.starts_at):
             raise ValueError("Укажите команду и окончание после начала")
         return self
 
@@ -156,7 +156,7 @@ def edit_event(event_id: int, b: EventInput, u=Depends(admin)):
             e = s.scalar(select(Event).where(Event.id == event_id).with_for_update())
             if not e:
                 raise HTTPException(404)
-            if b.capacity < e.issued_count:
+            if b.capacity is not None and b.capacity < e.issued_count:
                 raise HTTPException(409, "Вместимость меньше числа выданных билетов")
             for k, v in b.model_dump().items():
                 setattr(e, k, v)
@@ -256,9 +256,9 @@ def redeem(b: Scan, u=Depends(staff)):
             result = "wrong_event"
         elif t and e:
             # Conditional UPDATE is the authority, never a read-then-write status check.
-            if not e.active or e.expires_at <= now():
+            if not e.active or (e.expires_at is not None and e.expires_at <= now()):
                 result = "expired"
-            elif e.starts_at > now():
+            elif e.starts_at is not None and e.starts_at > now():
                 result = "not_started"
             else:
                 updated = s.execute(update(Ticket).where(Ticket.id == t.id, Ticket.status == "issued").values(status="used", redeemed_at=now(), redeemed_by=u.id).returning(Ticket.id)).scalar()
@@ -285,7 +285,7 @@ def public_ticket(token: str):
         if not t:
             raise HTTPException(404, "Билет не найден")
         e, p = s.get(Event, t.event_id), s.get(Participant, t.participant_id)
-        status = "expired" if t.status == "issued" and (e.expires_at <= now() or not e.active) else t.status
+        status = "expired" if t.status == "issued" and ((e.expires_at is not None and e.expires_at <= now()) or not e.active) else t.status
         return {"id": t.id, "event": e.name, "username": p.username, "status": status, "starts_at": e.starts_at, "expires_at": e.expires_at}
 
 
