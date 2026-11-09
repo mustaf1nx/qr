@@ -1,0 +1,12 @@
+[project]
+name = "event-pass"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.115,<1", "uvicorn[standard]>=0.34,<1", "sqlalchemy>=2.0,<3", "psycopg[binary]>=3.2,<4", "httpx>=0.28,<1", "qrcode[pil]>=8,<9", "pwdlib[argon2]>=0.2,<1", "pydantic-settings>=2.7,<3", "alembic>=1.14,<2"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
