@@ -1,7 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 
 type Registration = {id:number;name:string;starts_at:number|null;open:boolean;reason:string;instagram:string};
-type Attempt = {requestId:string;opened:boolean;ticketUrl?:string};
+type Attempt = {requestId:string;opened:boolean;checked?:boolean;ticketUrl?:string};
 const readAttempt=(key:string):Attempt=>{
   try {const raw=JSON.parse(sessionStorage.getItem(key)||'null');if(raw?.requestId)return raw;}catch{}
   return {requestId:crypto.randomUUID(),opened:false};
@@ -21,8 +21,24 @@ export default function PublicRegistration(){
     fetch('/api/registration/'+eventId).then(async r=>{const data=await r.json();if(!r.ok)throw Error(data.detail||'Не удалось открыть мероприятие');return data;}).then(d=>{if(alive)setEvent(d);}).catch(e=>{if(alive)setError(e.message);});
     return()=>{alive=false;};
   },[eventId]);
+  const checking=!!event?.instagram&&attempt.opened&&!attempt.checked;
+  useEffect(()=>{
+    if(!checking)return;
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    const start=()=>{
+      if(timer)clearTimeout(timer);
+      if(document.visibilityState==='visible'&&document.hasFocus()){
+        timer=setTimeout(()=>update({...attempt,checked:true}),2500);
+      }
+    };
+    start();
+    window.addEventListener('focus',start);
+    window.addEventListener('blur',start);
+    document.addEventListener('visibilitychange',start);
+    return()=>{if(timer)clearTimeout(timer);window.removeEventListener('focus',start);window.removeEventListener('blur',start);document.removeEventListener('visibilitychange',start);};
+  },[checking,attempt]);
   async function issue(){
-    if(locked.current)return;
+    if(locked.current||checking||!!event?.instagram&&!attempt.checked)return;
     locked.current=true;setBusy(true);setError('');
     // Persist before sending so a retry after navigation keeps the same request ID.
     update(attempt);
@@ -44,15 +60,14 @@ export default function PublicRegistration(){
     {event&&attempt.ticketUrl?<>
       <p>Ваш билет уже готов. Откройте его и покажите QR на входе.</p>
       <a className="button registration-action" href={attempt.ticketUrl}>Открыть мой билет →</a>
-      {event.open&&<button className="ghost registration-action" onClick={()=>update({requestId:crypto.randomUUID(),opened:false})}>Получить ещё один билет</button>}
     </>:event&&!event.open?<p className="notice">{event.reason}</p>:event?<>
       <p>Без анкеты и входа в аккаунт. Получите QR и покажите его сотруднику на входе.</p>
       {event.instagram&&<section className="registration-step">
         <span className="step-number">1</span><div><h2>Загляните в наш Instagram</h2><p>Подпишитесь на @{event.instagram}, чтобы быть в курсе событий, и вернитесь сюда.</p>
-        <a className="button registration-action secondary" href={'https://www.instagram.com/'+encodeURIComponent(event.instagram)+'/'} target="_blank" rel="noopener noreferrer" onClick={()=>update({...attempt,opened:true})}>Открыть Instagram ↗</a></div>
+        <a className="button registration-action secondary" href={'https://www.instagram.com/'+encodeURIComponent(event.instagram)+'/'} target="_blank" rel="noopener noreferrer" onClick={()=>update({...attempt,opened:true,checked:false})}>Открыть Instagram ↗</a></div>
       </section>}
       <section className="registration-step"><span className="step-number">{event.instagram?'2':'1'}</span><div><h2>Заберите свой QR</h2><p>Каждый билет действует на один проход.</p>
-        <button className="registration-action" disabled={busy||!!event.instagram&&!attempt.opened} onClick={issue}>{busy?'Создаём ваш билет…':'Получить билет →'}</button>
+        <button className="registration-action" disabled={busy||!!event.instagram&&!attempt.checked} aria-busy={busy||checking} onClick={issue}>{checking?'Проверяем переход…':busy?'Создаём ваш билет…':'Получить билет →'}</button>
       </div></section>
       <small>Подписка добровольная. Переход в Instagram не подтверждает подписку автоматически.</small>
     </>:null}
