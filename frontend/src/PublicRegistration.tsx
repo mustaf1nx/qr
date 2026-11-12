@@ -73,7 +73,7 @@ export default function PublicRegistration(){
         <form onSubmit={e=>{e.preventDefault();issue()}}>
         <label>Имя<input autoComplete="given-name" value={firstName} onChange={e=>setFirstName(e.target.value)} required maxLength={49} pattern=".*\S.*"/></label>
         <label>Фамилия<input autoComplete="family-name" value={lastName} onChange={e=>setLastName(e.target.value)} required maxLength={50} pattern=".*\S.*"/></label>
-        <label>Номер телефона<input type="tel" autoComplete="tel" value={phone} onChange={e=>setPhone(e.target.value)} required maxLength={30} placeholder="+7 700 123 45 67" pattern="[+0-9 ()\-]{7,30}"/></label>
+        <label>Номер телефона<input type="tel" autoComplete="tel" value={phone} onChange={e=>setPhone(e.target.value)} required maxLength={30} placeholder="+7 700 123 45 67" pattern="[+0-9 \(\)\-]{7,30}"/></label>
         <p><small>Имя, фамилия и телефон сохраняются организатором вместе с билетом.</small></p>
         <button type="submit" className="registration-action" disabled={busy||!!event.instagram&&!attempt.checked} aria-busy={busy||checking}>{checking?'Проверяем переход…':busy?'Создаём ваш билет…':'Получить билет →'}</button></form>
       </div></section>
