@@ -7,6 +7,7 @@ import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import UUID, uuid4
 import qrcode
 from fastapi import FastAPI, Request, Response, HTTPException, Depends
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -115,8 +116,8 @@ class EventInput(BaseModel):
     starts_at: int | None = None
     expires_at: int | None = None
     capacity: int | None = Field(default=None, ge=1, le=1000000)
-    keyword: str = Field(min_length=1, max_length=50)
-    require_follow: bool = True
+    keyword: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=50)
+    require_follow: bool = False
     active: bool = True
 
     @model_validator(mode="after")
@@ -177,19 +178,19 @@ def stats(event_id: int, u=Depends(admin)):
 def tickets(event_id: int, q: str = "", offset: int = 0, u=Depends(admin)):
     with Session() as s:
         rows = s.execute(select(Ticket, Participant).join(Participant).where(Ticket.event_id == event_id, Participant.username.contains(q[:100], autoescape=True)).order_by(Ticket.id.desc()).offset(max(0, offset)).limit(100)).all()
-        return [{"id": t.id, "username": p.username, "status": t.status, "redeemed_at": t.redeemed_at, "url": f"/tickets/{t.token}"} for t, p in rows]
+        return [{"id": t.id, "username": p.username, "anonymous": p.igsid.startswith(("web:", "manual:")), "status": t.status, "redeemed_at": t.redeemed_at, "url": f"/tickets/{t.token}"} for t, p in rows]
 
 
 class ManualInput(BaseModel):
     event_id: int
-    igsid: str = Field(min_length=1, max_length=100)
-    username: str = Field(min_length=1, max_length=100)
+    igsid: str | None = Field(default=None, min_length=1, max_length=100)
+    username: str = Field(default="Гость", min_length=1, max_length=100)
 
 
 @app.post("/api/admin/tickets")
 def manual(b: ManualInput, u=Depends(admin)):
     try:
-        t = issue_ticket(b.event_id, b.igsid, b.username, None, override=True)
+        t = issue_ticket(b.event_id, b.igsid or f"manual:{uuid4()}", b.username, None, override=True)
         return {"url": f"/tickets/{t.token}", "id": t.id}
     except TicketError as ex:
         raise HTTPException(409, str(ex))
@@ -269,7 +270,7 @@ def redeem(b: Scan, u=Depends(staff)):
                     result = t.status
         s.add(Checkin(event_id=b.event_id, ticket_id=t.id if t else None, staff_id=u.id, result=result))
         p = s.get(Participant, t.participant_id) if t and t.event_id == b.event_id else None
-        return {"result": result, "username": p.username if p else None, "ticket_id": t.id if p else None}
+        return {"result": result, "username": p.username if p else None, "anonymous": p.igsid.startswith(("web:", "manual:")) if p else False, "ticket_id": t.id if p else None}
 
 
 @app.get("/api/admin/checkins")
@@ -286,7 +287,36 @@ def public_ticket(token: str):
             raise HTTPException(404, "Билет не найден")
         e, p = s.get(Event, t.event_id), s.get(Participant, t.participant_id)
         status = "expired" if t.status == "issued" and ((e.expires_at is not None and e.expires_at <= now()) or not e.active) else t.status
-        return {"id": t.id, "event": e.name, "username": p.username, "status": status, "starts_at": e.starts_at, "expires_at": e.expires_at}
+        return {"id": t.id, "event_id": e.id, "event": e.name, "username": p.username, "anonymous": p.igsid.startswith(("web:", "manual:")), "status": status, "starts_at": e.starts_at, "expires_at": e.expires_at}
+
+
+@app.get("/api/registration/{event_id}")
+def registration(event_id: int):
+    with Session() as s:
+        e = s.get(Event, event_id)
+        if not e:
+            raise HTTPException(404, "Мероприятие не найдено")
+        opened = e.active and (e.expires_at is None or e.expires_at > now())
+        full = e.capacity is not None and e.issued_count >= e.capacity
+        return {"id": e.id, "name": e.name, "starts_at": e.starts_at,
+                "open": opened and not full,
+                "reason": "Все билеты выданы" if full else "Выдача билетов закрыта",
+                "instagram": settings.instagram_username}
+
+
+class GuestRequest(BaseModel):
+    # Identifies a single issuance attempt, not a person/account/device.
+    # Retrying a lost response must return the same ticket.
+    request_id: UUID
+
+
+@app.post("/api/registration/{event_id}/tickets")
+def guest_ticket(event_id: int, b: GuestRequest):
+    try:
+        t = issue_ticket(event_id, f"web:{b.request_id}", "Гость", None, override=True)
+        return {"id": t.id, "url": f"/tickets/{t.token}"}
+    except TicketError as ex:
+        raise HTTPException(409, str(ex))
 
 
 def qr_response(value):
@@ -302,10 +332,11 @@ def ticket_qr(token: str):
 
 
 @app.get("/api/admin/poster-qr")
-def poster_qr(u=Depends(admin)):
-    if not settings.instagram_username:
-        raise HTTPException(409, "Instagram ещё не настроен")
-    return qr_response(f"https://ig.me/m/{settings.instagram_username}")
+def poster_qr(event_id: int, u=Depends(admin)):
+    with Session() as s:
+        if not s.get(Event, event_id):
+            raise HTTPException(404, "Мероприятие не найдено")
+    return qr_response(f"{settings.public_base_url}/register/{event_id}")
 
 
 @app.get("/api/admin/integration")

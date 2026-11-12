@@ -127,6 +127,60 @@ def test_public_ticket_and_qr():
     assert c.get('/api/tickets/unknown').status_code==404
 
 
+def test_guest_flow_without_account_and_repeat_request():
+    from uuid import uuid4
+    from app.db import Participant
+    c=TestClient(app, headers={'X-Requested-With':'EventPass'})
+    assert c.get('/api/registration/1').json()['open'] is True
+    body={'request_id':str(uuid4())}
+    a=c.post('/api/registration/1/tickets',json=body)
+    assert a.status_code==200
+    assert c.post('/api/registration/1/tickets',json=body).json()==a.json()
+    b=c.post('/api/registration/1/tickets',json={'request_id':str(uuid4())})
+    assert b.status_code==200 and b.json()['id']!=a.json()['id']
+    token=a.json()['url'].split('/')[-1]
+    assert c.get('/api/tickets/'+token).json()['anonymous'] is True
+    with Session() as s:
+        assert s.get(Event,1).issued_count==2
+        assert all(p.follows is None for p in s.scalars(select(Participant)))
+    scanner=client('scanner')
+    for expected in ('accepted','used'):
+        assert scanner.post('/api/scanner/redeem',json={'event_id':1,'token':token}).json()['result']==expected
+
+
+def test_guest_capacity_closed_and_invalid_request():
+    from uuid import uuid4
+    c=TestClient(app,headers={'X-Requested-With':'EventPass'})
+    assert c.post('/api/registration/1/tickets',json={}).status_code==422
+    assert c.get('/api/registration/999').status_code==404
+    with Session.begin() as s:
+        s.get(Event,1).capacity=1
+    body={'request_id':str(uuid4())}
+    assert c.post('/api/registration/1/tickets',json=body).status_code==200
+    assert c.post('/api/registration/1/tickets',json=body).status_code==200
+    assert c.post('/api/registration/1/tickets',json={'request_id':str(uuid4())}).status_code==409
+    assert c.get('/api/registration/1').json()['open'] is False
+    with Session.begin() as s:
+        s.get(Event,1).active=False
+        s.get(Event,1).capacity=None
+    assert c.post('/api/registration/1/tickets',json={'request_id':str(uuid4())}).status_code==409
+
+
+def test_poster_points_to_registration(monkeypatch):
+    import app.main as main
+    monkeypatch.setattr(main,'qr_response',lambda value:{'encoded':value})
+    assert client().get('/api/admin/poster-qr?event_id=1').json()['encoded']==settings.public_base_url+'/register/1'
+    assert client('scanner').get('/api/admin/poster-qr?event_id=1').status_code==403
+
+
+def test_manual_issuance_without_instagram_id():
+    c=client()
+    a=c.post('/api/admin/tickets',json={'event_id':1})
+    b=c.post('/api/admin/tickets',json={'event_id':1})
+    assert a.status_code==b.status_code==200
+    assert a.json()['id']!=b.json()['id']
+
+
 def test_worker_delivery_retry_without_duplicate_ticket(monkeypatch):
     import asyncio
     from app import meta
