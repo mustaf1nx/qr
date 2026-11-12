@@ -37,6 +37,9 @@ class Participant(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     igsid: Mapped[str] = mapped_column(String(100), unique=True)
     username: Mapped[str] = mapped_column(String(100))
+    first_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
     follows: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 

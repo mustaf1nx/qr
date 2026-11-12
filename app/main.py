@@ -12,7 +12,7 @@ import qrcode
 from fastapi import FastAPI, Request, Response, HTTPException, Depends
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 from pwdlib import PasswordHash
 from sqlalchemy import select, update, func, delete, text
 from sqlalchemy.exc import IntegrityError
@@ -178,7 +178,7 @@ def stats(event_id: int, u=Depends(admin)):
 def tickets(event_id: int, q: str = "", offset: int = 0, u=Depends(admin)):
     with Session() as s:
         rows = s.execute(select(Ticket, Participant).join(Participant).where(Ticket.event_id == event_id, Participant.username.contains(q[:100], autoescape=True)).order_by(Ticket.id.desc()).offset(max(0, offset)).limit(100)).all()
-        return [{"id": t.id, "username": p.username, "anonymous": p.igsid.startswith(("web:", "manual:")), "status": t.status, "redeemed_at": t.redeemed_at, "url": f"/tickets/{t.token}"} for t, p in rows]
+        return [{"id": t.id, "first_name": p.first_name, "last_name": p.last_name, "phone": p.phone, "username": p.username, "anonymous": p.igsid.startswith(("web:", "manual:")), "status": t.status, "redeemed_at": t.redeemed_at, "url": f"/tickets/{t.token}"} for t, p in rows]
 
 
 class ManualInput(BaseModel):
@@ -308,12 +308,31 @@ class GuestRequest(BaseModel):
     # Identifies a single issuance attempt, not a person/account/device.
     # Retrying a lost response must return the same ticket.
     request_id: UUID
+    first_name: str = Field(min_length=1, max_length=49)
+    last_name: str = Field(min_length=1, max_length=50)
+    phone: str = Field(min_length=7, max_length=30)
+
+    @field_validator("first_name", "last_name", mode="before")
+    @classmethod
+    def trim_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("phone")
+    @classmethod
+    def clean_phone(cls, value):
+        value = value.strip()
+        if any(c not in "+0123456789 ()-" for c in value) or "+" in value[1:]:
+            raise ValueError("Укажите корректный номер телефона")
+        digits = "".join(c for c in value if c in "0123456789")
+        if not 7 <= len(digits) <= 15:
+            raise ValueError("Номер должен содержать от 7 до 15 цифр")
+        return ("+" if value.startswith("+") else "") + digits
 
 
 @app.post("/api/registration/{event_id}/tickets")
 def guest_ticket(event_id: int, b: GuestRequest):
     try:
-        t = issue_ticket(event_id, f"web:{b.request_id}", "Гость", None, override=True)
+        t = issue_ticket(event_id, f"web:{b.request_id}", f"{b.first_name} {b.last_name}", None, override=True, first_name=b.first_name, last_name=b.last_name, phone=b.phone)
         return {"id": t.id, "url": f"/tickets/{t.token}"}
     except TicketError as ex:
         raise HTTPException(409, str(ex))

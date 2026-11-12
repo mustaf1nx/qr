@@ -8,7 +8,7 @@ class TicketError(Exception):
     pass
 
 
-def issue_ticket(event_id, igsid, username, follows, override=False):
+def issue_ticket(event_id, igsid, username, follows, override=False, first_name=None, last_name=None, phone=None):
     # Event row is locked BEFORE counting/creating: serializes capacity and duplicates.
     with Session.begin() as s:
         e = s.scalar(select(Event).where(Event.id == event_id).with_for_update())
@@ -32,6 +32,7 @@ def issue_ticket(event_id, igsid, username, follows, override=False):
         if not reserved.rowcount:
             raise TicketError("Все билеты уже выданы")
         p.username, p.follows = username, follows
+        p.first_name, p.last_name, p.phone = first_name, last_name, phone
         t = Ticket(event_id=event_id, participant_id=p.id, token=secrets.token_urlsafe(32))
         s.add(t)
         s.flush()

@@ -132,17 +132,23 @@ def test_guest_flow_without_account_and_repeat_request():
     from app.db import Participant
     c=TestClient(app, headers={'X-Requested-With':'EventPass'})
     assert c.get('/api/registration/1').json()['open'] is True
-    body={'request_id':str(uuid4())}
+    body={'request_id':str(uuid4()),'first_name':'Анна','last_name':'Иванова','phone':'+7 700 123 45 67'}
     a=c.post('/api/registration/1/tickets',json=body)
     assert a.status_code==200
     assert c.post('/api/registration/1/tickets',json=body).json()==a.json()
-    b=c.post('/api/registration/1/tickets',json={'request_id':str(uuid4())})
+    b=c.post('/api/registration/1/tickets',json={'request_id':str(uuid4()),'first_name':'Анна','last_name':'Иванова','phone':'+7 700 123 45 67'})
     assert b.status_code==200 and b.json()['id']!=a.json()['id']
     token=a.json()['url'].split('/')[-1]
     assert c.get('/api/tickets/'+token).json()['anonymous'] is True
     with Session() as s:
         assert s.get(Event,1).issued_count==2
         assert all(p.follows is None for p in s.scalars(select(Participant)))
+    rows=client().get('/api/admin/tickets?event_id=1').json()
+    assert rows[0]['phone']=='+77001234567'
+    assert rows[0]['first_name']=='Анна'
+    assert 'phone' not in c.get('/api/tickets/'+token).json()
+    assert c.post('/api/registration/1/tickets',json={**body,'first_name':'   '}).status_code==422
+    assert c.post('/api/registration/1/tickets',json={**body,'phone':'invalid'}).status_code==422
     scanner=client('scanner')
     for expected in ('accepted','used'):
         assert scanner.post('/api/scanner/redeem',json={'event_id':1,'token':token}).json()['result']==expected
@@ -155,15 +161,15 @@ def test_guest_capacity_closed_and_invalid_request():
     assert c.get('/api/registration/999').status_code==404
     with Session.begin() as s:
         s.get(Event,1).capacity=1
-    body={'request_id':str(uuid4())}
+    body={'request_id':str(uuid4()),'first_name':'Анна','last_name':'Иванова','phone':'+7 700 123 45 67'}
     assert c.post('/api/registration/1/tickets',json=body).status_code==200
     assert c.post('/api/registration/1/tickets',json=body).status_code==200
-    assert c.post('/api/registration/1/tickets',json={'request_id':str(uuid4())}).status_code==409
+    assert c.post('/api/registration/1/tickets',json={'request_id':str(uuid4()),'first_name':'Анна','last_name':'Иванова','phone':'+7 700 123 45 67'}).status_code==409
     assert c.get('/api/registration/1').json()['open'] is False
     with Session.begin() as s:
         s.get(Event,1).active=False
         s.get(Event,1).capacity=None
-    assert c.post('/api/registration/1/tickets',json={'request_id':str(uuid4())}).status_code==409
+    assert c.post('/api/registration/1/tickets',json={'request_id':str(uuid4()),'first_name':'Анна','last_name':'Иванова','phone':'+7 700 123 45 67'}).status_code==409
 
 
 def test_poster_points_to_registration(monkeypatch):
